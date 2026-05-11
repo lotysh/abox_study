@@ -31,7 +31,8 @@ override.tf.json
 # Ignore CLI configuration files
 .terraformrc
 terraform.rc
-
+/.terraform.lock.hcl
+**/bootstrap/.terraform.lock.hcl
 # Claude
 CLAUDE.md
 
