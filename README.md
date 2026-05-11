@@ -30,6 +30,43 @@ kubectl get svc -n agentgateway-system  # grab the LoadBalancer IP
 
 Point your AI app at the gateway IP on port 80.
 
+## LLM gateway
+
+The Kubernetes deployment routes OpenAI-compatible requests through agentgateway.
+The real provider key is not stored in Git. Create it locally after the cluster is up:
+
+```bash
+OPENAI_API_KEY=sk-... ./scripts/create-llm-secrets.sh
+```
+
+Then reconcile or re-run the release flow. For local checks, port-forward the gateway proxy:
+
+```bash
+kubectl --kubeconfig bootstrap/abox-config -n agentgateway-system port-forward deployment/agentgateway-external 8080:80
+```
+
+Test the LLM route:
+
+```bash
+curl "localhost:8080/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4.1-nano",
+    "messages": [{"role": "user", "content": "What is Kubernetes in one sentence?"}]
+  }'
+```
+
+Inspect the agentgateway Admin UI:
+
+```bash
+kubectl --kubeconfig bootstrap/abox-config -n agentgateway-system port-forward deployment/agentgateway-external 15000:15000
+```
+
+Open http://localhost:15000/ui/.
+
+kagent uses the `agentgateway-openai` `ModelConfig`, which points at the in-cluster
+agentgateway endpoint instead of calling OpenAI directly.
+
 ## How it works
 
 ```

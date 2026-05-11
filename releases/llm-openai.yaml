@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llm-openai-config
+  namespace: agentgateway-system
+data:
+  provider: openai
+  model: gpt-4.1-nano
+  route: /v1
+  internalBaseUrl: http://agentgateway-external.agentgateway-system.svc.cluster.local/v1
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: openai
+  namespace: agentgateway-system
+spec:
+  ai:
+    provider:
+      openai:
+        model: gpt-4.1-nano
+  policies:
+    auth:
+      secretRef:
+        name: openai-secret
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: openai
+  namespace: agentgateway-system
+spec:
+  parentRefs:
+  - name: agentgateway-external
+    namespace: agentgateway-system
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /v1
+    backendRefs:
+    - name: openai
+      namespace: agentgateway-system
+      group: agentgateway.dev
+      kind: AgentgatewayBackend

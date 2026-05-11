@@ -33,6 +33,12 @@ override.tf.json
 terraform.rc
 /.terraform.lock.hcl
 **/bootstrap/.terraform.lock.hcl
+bootstrap/abox-config
+bootstrap/.kubeconfig
+bootstrap/preview-config
+.env
+.env.*
+*.secret.yaml
+*.secrets.yaml
 # Claude
 CLAUDE.md
-
