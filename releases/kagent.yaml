@@ -111,7 +111,7 @@ spec:
 apiVersion: kagent.dev/v1alpha2
 kind: ModelConfig
 metadata:
-  name: agentgateway-openai
+  name: default-model-config
   namespace: kagent
 spec:
   apiKeySecret: kagent-agentgateway-api-key

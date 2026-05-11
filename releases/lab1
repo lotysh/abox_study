@@ -1,0 +1,5 @@
+Deployed agentgateway and kagent via Flux/Helm into Kubernetes.
+Configured OpenAI as an AgentgatewayBackend with API key stored in Kubernetes Secret.
+Added HTTPRoute /v1 to route OpenAI-compatible API calls through agentgateway.
+Verified agentgateway UI on port 15000 and LLM access through /v1/chat/completions with HTTP 200.
+Flux now reconciles resources from ghcr.io/lotysh/abox_study/releases:0.5.9.
