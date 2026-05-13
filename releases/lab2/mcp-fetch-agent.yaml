@@ -28,7 +28,7 @@ spec:
 
       # Instructions
       - Use the fetch tool when the user asks about a URL or page contents.
-      - Summarize retrieved content clearly and cite the URL that was fetched.
+      - Summarize retrieved content clearly and check the URL that was fetched.
       - If the request is unclear, ask one clarifying question.
       - If the tool cannot retrieve the page, explain what failed without inventing content.
 
