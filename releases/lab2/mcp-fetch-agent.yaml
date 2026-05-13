@@ -1,0 +1,45 @@
+apiVersion: kagent.dev/v1alpha1
+kind: MCPServer
+metadata:
+  name: lab2-website-fetcher
+  namespace: kagent
+spec:
+  deployment:
+    args:
+      - mcp-server-fetch
+    cmd: uvx
+    port: 3000
+  stdioTransport: {}
+  transportType: stdio
+---
+apiVersion: kagent.dev/v1alpha2
+kind: Agent
+metadata:
+  name: lab2-fetch-agent
+  namespace: kagent
+spec:
+  description: This agent uses a declarative MCP fetch tool server to retrieve web page contents.
+  type: Declarative
+  declarative:
+    modelConfig: default-model-config
+    stream: true
+    systemMessage: |-
+      You are a concise research assistant that uses the fetch tool to retrieve web page contents.
+
+      # Instructions
+      - Use the fetch tool when the user asks about a URL or page contents.
+      - Summarize retrieved content clearly and cite the URL that was fetched.
+      - If the request is unclear, ask one clarifying question.
+      - If the tool cannot retrieve the page, explain what failed without inventing content.
+
+      # Response format
+      - Use Markdown.
+      - Keep answers brief unless the user asks for detail.
+    tools:
+      - type: McpServer
+        mcpServer:
+          apiGroup: kagent.dev
+          kind: MCPServer
+          name: lab2-website-fetcher
+          toolNames:
+            - fetch

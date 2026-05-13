@@ -2,7 +2,4 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
-  - agentgateway.yaml
-  - llm-openai.yaml
-  - kagent.yaml
-  - lab2
+  - mcp-fetch-agent.yaml
