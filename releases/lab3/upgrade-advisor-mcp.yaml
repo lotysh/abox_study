@@ -1,0 +1,342 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-upgrade-advisor-code
+  namespace: kagent
+data:
+  server.py: |
+    from __future__ import annotations
+
+    from typing import Any
+
+    from fastmcp import FastMCP
+    from kubernetes import client, config
+    from kubernetes.client import ApiException
+
+
+    mcp = FastMCP("platform-upgrade-advisor")
+
+
+    def _load_config() -> None:
+      try:
+        config.load_incluster_config()
+      except config.ConfigException:
+        config.load_kube_config()
+
+
+    def _custom_api() -> client.CustomObjectsApi:
+      _load_config()
+      return client.CustomObjectsApi()
+
+
+    def _core_api() -> client.CoreV1Api:
+      _load_config()
+      return client.CoreV1Api()
+
+
+    def _apps_api() -> client.AppsV1Api:
+      _load_config()
+      return client.AppsV1Api()
+
+
+    def _items(group: str, version: str, plural: str) -> list[dict[str, Any]]:
+      api = _custom_api()
+      try:
+        return api.list_cluster_custom_object(group, version, plural).get("items", [])
+      except ApiException as exc:
+        return [{"error": f"{group}/{version}/{plural}: {exc.reason}", "status": exc.status}]
+
+
+    def _meta(item: dict[str, Any]) -> dict[str, str]:
+      metadata = item.get("metadata", {})
+      return {
+        "namespace": metadata.get("namespace", ""),
+        "name": metadata.get("name", ""),
+      }
+
+
+    def _condition_summary(item: dict[str, Any]) -> list[dict[str, str]]:
+      conditions = item.get("status", {}).get("conditions", [])
+      return [
+        {
+          "type": str(condition.get("type", "")),
+          "status": str(condition.get("status", "")),
+          "reason": str(condition.get("reason", "")),
+          "message": str(condition.get("message", ""))[:240],
+        }
+        for condition in conditions
+      ]
+
+
+    @mcp.tool
+    def discover_upgrade_targets() -> dict[str, Any]:
+      """Discover GitOps-managed platform components that can be considered for upgrades."""
+      helm_releases = _items("helm.toolkit.fluxcd.io", "v2", "helmreleases")
+      oci_repositories = _items("source.toolkit.fluxcd.io", "v1", "ocirepositories")
+      kustomizations = _items("kustomize.toolkit.fluxcd.io", "v1", "kustomizations")
+      agents = _items("kagent.dev", "v1alpha2", "agents")
+      mcpservers = _items("kagent.dev", "v1alpha1", "mcpservers")
+      backends = _items("agentgateway.dev", "v1alpha1", "agentgatewaybackends")
+
+      nodes = []
+      for node in _core_api().list_node().items:
+        nodes.append(
+          {
+            "name": node.metadata.name,
+            "kubeletVersion": node.status.node_info.kubelet_version,
+            "containerRuntimeVersion": node.status.node_info.container_runtime_version,
+            "osImage": node.status.node_info.os_image,
+          }
+        )
+
+      deployments = []
+      for deployment in _apps_api().list_deployment_for_all_namespaces().items:
+        containers = deployment.spec.template.spec.containers
+        deployments.append(
+          {
+            "namespace": deployment.metadata.namespace,
+            "name": deployment.metadata.name,
+            "images": [container.image for container in containers],
+          }
+        )
+
+      return {
+        "summary": {
+          "helmReleases": len([x for x in helm_releases if "error" not in x]),
+          "ociRepositories": len([x for x in oci_repositories if "error" not in x]),
+          "kustomizations": len([x for x in kustomizations if "error" not in x]),
+          "deployments": len(deployments),
+          "nodes": len(nodes),
+        },
+        "helmReleases": [
+          {
+            **_meta(item),
+            "releaseName": item.get("spec", {}).get("releaseName", ""),
+            "chartRef": item.get("spec", {}).get("chartRef", {}),
+            "conditions": _condition_summary(item),
+          }
+          for item in helm_releases
+        ],
+        "ociRepositories": [
+          {
+            **_meta(item),
+            "url": item.get("spec", {}).get("url", ""),
+            "ref": item.get("spec", {}).get("ref", {}),
+            "lastAppliedRevision": item.get("status", {}).get("artifact", {}).get("revision", ""),
+          }
+          for item in oci_repositories
+        ],
+        "kustomizations": [
+          {
+            **_meta(item),
+            "sourceRef": item.get("spec", {}).get("sourceRef", {}),
+            "path": item.get("spec", {}).get("path", ""),
+            "lastAppliedRevision": item.get("status", {}).get("lastAppliedRevision", ""),
+            "conditions": _condition_summary(item),
+          }
+          for item in kustomizations
+        ],
+        "nodes": nodes,
+        "deployments": deployments,
+        "kagent": {
+          "agents": [_meta(item) | {"conditions": _condition_summary(item)} for item in agents],
+          "mcpServers": [_meta(item) | {"conditions": _condition_summary(item)} for item in mcpservers],
+          "agentgatewayBackends": [_meta(item) | {"conditions": _condition_summary(item)} for item in backends],
+        },
+      }
+
+
+    @mcp.tool
+    def get_current_versions(component: str = "all") -> dict[str, Any]:
+      """Return current versions and revisions for GitOps-controlled components."""
+      discovered = discover_upgrade_targets()
+      component_filter = component.lower()
+
+      versions = {
+        "nodes": discovered["nodes"],
+        "ociRepositories": discovered["ociRepositories"],
+        "kustomizations": discovered["kustomizations"],
+        "deployments": discovered["deployments"],
+      }
+
+      if component_filter == "all":
+        return versions
+
+      return {
+        key: [
+          value
+          for value in values
+          if component_filter in str(value).lower()
+        ]
+        for key, values in versions.items()
+      }
+
+
+    @mcp.tool
+    def explain_upgrade_risks(component_type: str = "platform") -> dict[str, Any]:
+      """Explain common upgrade risks for a platform component type."""
+      component_type = component_type.lower()
+      risks = {
+        "helm": [
+          "Chart values may change between versions.",
+          "CRDs may need to be upgraded before controllers.",
+          "Controller restarts can briefly interrupt reconciliation.",
+          "Rollback should use the previous Git tag or chart reference.",
+        ],
+        "crd": [
+          "CRD schema changes can reject existing custom resources.",
+          "Downgrades are often unsafe after storedVersion changes.",
+          "Apply CRD upgrades before dependent Helm releases.",
+        ],
+        "node": [
+          "Node upgrades can evict workloads.",
+          "DaemonSets and CNI compatibility must be checked first.",
+          "Use rolling replacement and validate workload disruption budgets.",
+        ],
+        "gateway": [
+          "Gateway API compatibility must match the gateway controller version.",
+          "Route acceptance and backend references must be checked after upgrade.",
+          "Traffic policies can change request routing behavior.",
+        ],
+        "platform": [
+          "Upgrade dependencies first: CRDs, controllers, then workloads.",
+          "Prefer GitOps changes with one component per pull request.",
+          "Record current Flux revisions before changing tags.",
+          "Validate readiness, routes, and agent tool calls after reconcile.",
+        ],
+      }
+      return {
+        "componentType": component_type,
+        "risks": risks.get(component_type, risks["platform"]),
+        "recommendedChecks": [
+          "kubectl get kustomization -n flux-system",
+          "kubectl get helmreleases -A",
+          "kubectl get pods -A",
+          "kubectl get gateway,httproute -A",
+        ],
+      }
+
+
+    @mcp.tool
+    def propose_gitops_upgrade_plan(component: str, desired_version: str = "") -> dict[str, Any]:
+      """Propose a safe GitOps upgrade plan without applying any changes."""
+      component_key = component.lower()
+      known_files = {
+        "kagent": ["releases/kagent.yaml", "releases/crds/kagent-crds.yaml"],
+        "agentgateway": ["releases/agentgateway.yaml", "releases/crds/agentgateway-crds.yaml"],
+        "gateway-api": ["releases/crds/gateway-api-crds.yaml"],
+        "flux": ["bootstrap/flux.tf", "releases/kustomization.yaml"],
+        "lab2": ["releases/lab2/mcp-fetch-agent.yaml"],
+        "lab3": ["releases/lab3/"],
+      }
+      files = []
+      for key, paths in known_files.items():
+        if key in component_key:
+          files = paths
+          break
+
+      if not files:
+        files = [
+          "Search releases/ for the component chart, image, or OCI tag.",
+          "If infrastructure-owned, search bootstrap/ OpenTofu variables and resources.",
+        ]
+
+      return {
+        "component": component,
+        "desiredVersion": desired_version or "not specified",
+        "riskLevel": "medium" if desired_version else "unknown until a target version is chosen",
+        "gitopsFilesToInspect": files,
+        "plan": [
+          "Capture current state with Flux, HelmRelease, pod, and route checks.",
+          "Read upstream release notes and identify CRD or breaking-change requirements.",
+          "Change only GitOps/IaC source files; do not patch live resources manually.",
+          "Publish a new OCI release tag and wait for Flux reconciliation.",
+          "Validate controllers, routes, MCP servers, agents, and rollback path.",
+        ],
+        "postUpgradeChecks": [
+          "kubectl get kustomization -n flux-system",
+          "kubectl get helmreleases -A",
+          "kubectl get pods -A",
+          "kubectl get agents,mcpservers -n kagent",
+          "Run one agent prompt that exercises the upgraded path.",
+        ],
+      }
+
+
+    if __name__ == "__main__":
+      mcp.run(transport="streamable-http", host="0.0.0.0", port=3001, path="/mcp")
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-upgrade-advisor-mcp
+  namespace: kagent
+  labels:
+    app.kubernetes.io/name: platform-upgrade-advisor-mcp
+    app.kubernetes.io/part-of: lab3
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: platform-upgrade-advisor-mcp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: platform-upgrade-advisor-mcp
+        app.kubernetes.io/part-of: lab3
+    spec:
+      serviceAccountName: platform-upgrade-advisor
+      containers:
+        - name: mcp
+          image: ghcr.io/astral-sh/uv:debian
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+          args:
+            - uv run --with fastmcp --with kubernetes python /app/server.py
+          ports:
+            - name: mcp
+              containerPort: 3001
+          readinessProbe:
+            tcpSocket:
+              port: 3001
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 12
+          volumeMounts:
+            - name: code
+              mountPath: /app
+      volumes:
+        - name: code
+          configMap:
+            name: platform-upgrade-advisor-code
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: platform-upgrade-advisor-mcp
+  namespace: kagent
+  labels:
+    app.kubernetes.io/name: platform-upgrade-advisor-mcp
+    app.kubernetes.io/part-of: lab3
+spec:
+  selector:
+    app.kubernetes.io/name: platform-upgrade-advisor-mcp
+  ports:
+    - name: mcp
+      port: 3001
+      targetPort: 3001
+---
+apiVersion: kagent.dev/v1alpha2
+kind: RemoteMCPServer
+metadata:
+  name: platform-upgrade-advisor
+  namespace: kagent
+spec:
+  description: Platform upgrade advisor MCP app for GitOps-managed Kubernetes components.
+  protocol: STREAMABLE_HTTP
+  sseReadTimeout: 5m0s
+  terminateOnClose: true
+  timeout: 10s
+  url: http://platform-upgrade-advisor-mcp.kagent:3001/mcp

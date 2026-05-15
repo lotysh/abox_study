@@ -1,3 +1,18 @@
+# Lab 3: Platform Upgrade Advisor MCP App
+
+This lab deploys a GitOps-managed MCP App that inspects platform components and
+proposes safe GitOps upgrade plans.
+
+Resources:
+
+- `Deployment/platform-upgrade-advisor-mcp`
+- `Service/platform-upgrade-advisor-mcp`
+- `RemoteMCPServer/platform-upgrade-advisor`
+- `Agent/platform-upgrade-advisor`
+- read-only RBAC for Flux, kagent, Gateway API, agentgateway, workloads, and nodes
+
+The app intentionally does not apply changes. It only discovers state, explains
+risks, and proposes GitOps/IaC edits.
 
 ## Codespaces restart recovery
 
