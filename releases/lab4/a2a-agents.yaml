@@ -1,0 +1,371 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: lab4-a2a-agent
+  namespace: kagent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: lab4-a2a-agent-readonly
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "pods", "services", "nodes"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+  - apiGroups: ["helm.toolkit.fluxcd.io"]
+    resources: ["helmreleases"]
+    verbs: ["get", "list"]
+  - apiGroups: ["kustomize.toolkit.fluxcd.io"]
+    resources: ["kustomizations"]
+    verbs: ["get", "list"]
+  - apiGroups: ["source.toolkit.fluxcd.io"]
+    resources: ["gitrepositories", "helmrepositories", "ocirepositories"]
+    verbs: ["get", "list"]
+  - apiGroups: ["kagent.dev"]
+    resources: ["agents", "mcpservers", "remotemcpservers", "modelconfigs"]
+    verbs: ["get", "list"]
+  - apiGroups: ["agentgateway.dev"]
+    resources: ["agentgatewaybackends", "agentgatewaypolicies"]
+    verbs: ["get", "list"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gateways", "httproutes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: lab4-a2a-agent-readonly
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: lab4-a2a-agent-readonly
+subjects:
+  - kind: ServiceAccount
+    name: lab4-a2a-agent
+    namespace: kagent
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lab4-a2a-agent-code
+  namespace: kagent
+data:
+  server.py: |
+    from __future__ import annotations
+
+    import os
+    import uuid
+    from typing import Any
+
+    import httpx
+    import uvicorn
+    from fastapi import FastAPI, Request
+    from kubernetes import client, config
+    from kubernetes.client import ApiException
+
+
+    AGENT_NAME = os.getenv("AGENT_NAME", "lab4-a2a-agent")
+    AGENT_ROLE = os.getenv("AGENT_ROLE", "analyst")
+    PUBLIC_URL = os.getenv("PUBLIC_URL", f"http://{AGENT_NAME}.kagent:8080")
+    PEER_URL = os.getenv("PEER_URL", "")
+
+    app = FastAPI(title=AGENT_NAME)
+
+
+    def _load_config() -> None:
+      try:
+        config.load_incluster_config()
+      except config.ConfigException:
+        config.load_kube_config()
+
+
+    def _custom_api() -> client.CustomObjectsApi:
+      _load_config()
+      return client.CustomObjectsApi()
+
+
+    def _items(group: str, version: str, plural: str) -> list[dict[str, Any]]:
+      try:
+        return _custom_api().list_cluster_custom_object(group, version, plural).get("items", [])
+      except ApiException as exc:
+        return [{"error": f"{group}/{version}/{plural}: {exc.status} {exc.reason}"}]
+
+
+    def _names(items: list[dict[str, Any]]) -> list[str]:
+      names = []
+      for item in items:
+        if "error" in item:
+          names.append(item["error"])
+          continue
+        meta = item.get("metadata", {})
+        namespace = meta.get("namespace", "")
+        name = meta.get("name", "")
+        names.append(f"{namespace}/{name}" if namespace else name)
+      return names
+
+
+    def _inventory_summary() -> dict[str, Any]:
+      agents = _items("kagent.dev", "v1alpha2", "agents")
+      mcpservers = _items("kagent.dev", "v1alpha1", "mcpservers")
+      remote_mcpservers = _items("kagent.dev", "v1alpha1", "remotemcpservers")
+      modelconfigs = _items("kagent.dev", "v1alpha2", "modelconfigs")
+      helmreleases = _items("helm.toolkit.fluxcd.io", "v2", "helmreleases")
+      kustomizations = _items("kustomize.toolkit.fluxcd.io", "v1", "kustomizations")
+      backends = _items("agentgateway.dev", "v1alpha1", "agentgatewaybackends")
+
+      return {
+        "agents": _names(agents),
+        "mcpServers": _names(mcpservers),
+        "remoteMcpServers": _names(remote_mcpservers),
+        "modelConfigs": _names(modelconfigs),
+        "helmReleases": _names(helmreleases),
+        "kustomizations": _names(kustomizations),
+        "agentgatewayBackends": _names(backends),
+      }
+
+
+    def _task_result(text: str, artifact: dict[str, Any]) -> dict[str, Any]:
+      task_id = str(uuid.uuid4())
+      return {
+        "id": task_id,
+        "contextId": task_id,
+        "status": {
+          "state": "completed",
+          "message": {
+            "role": "agent",
+            "parts": [{"kind": "text", "text": text}],
+          },
+        },
+        "artifacts": [
+          {
+            "artifactId": "result",
+            "name": "A2A task result",
+            "parts": [{"kind": "data", "data": artifact}],
+          }
+        ],
+      }
+
+
+    @app.get("/healthz")
+    def healthz() -> dict[str, str]:
+      return {"status": "ok", "agent": AGENT_NAME}
+
+
+    @app.get("/.well-known/agent-card.json")
+    def agent_card() -> dict[str, Any]:
+      skill_id = "inventory-analysis" if AGENT_ROLE == "analyst" else "a2a-orchestration"
+      return {
+        "protocolVersion": "0.3.0",
+        "name": AGENT_NAME,
+        "description": (
+          "Analyzes AI resources discovered in the Kubernetes cluster."
+          if AGENT_ROLE == "analyst"
+          else "Coordinates an A2A task with the inventory analyst agent."
+        ),
+        "url": PUBLIC_URL,
+        "preferredTransport": "JSONRPC",
+        "capabilities": {
+          "streaming": False,
+          "pushNotifications": False,
+        },
+        "skills": [
+          {
+            "id": skill_id,
+            "name": skill_id.replace("-", " ").title(),
+            "description": "Return a cluster AI resource inventory summary via A2A task communication.",
+            "tags": ["a2a", "inventory", "kubernetes", "gitops"],
+            "examples": ["List AI resources in this cluster."],
+          }
+        ],
+      }
+
+
+    @app.post("/a2a")
+    async def a2a(request: Request) -> dict[str, Any]:
+      payload = await request.json()
+      method = payload.get("method", "")
+      request_id = payload.get("id")
+
+      if method not in {"message/send", "tasks/send"}:
+        return {
+          "jsonrpc": "2.0",
+          "id": request_id,
+          "error": {"code": -32601, "message": f"Unsupported method: {method}"},
+        }
+
+      if AGENT_ROLE == "orchestrator":
+        worker_payload = {
+          "jsonrpc": "2.0",
+          "id": str(uuid.uuid4()),
+          "method": "message/send",
+          "params": {
+            "message": {
+              "role": "user",
+              "parts": [{"kind": "text", "text": "Analyze current AI inventory resources."}],
+            }
+          },
+        }
+        async with httpx.AsyncClient(timeout=20) as http:
+          response = await http.post(f"{PEER_URL.rstrip('/')}/a2a", json=worker_payload)
+          response.raise_for_status()
+          worker_result = response.json()
+
+        result = _task_result(
+          "A2A handoff completed: orchestrator delegated inventory analysis to analyst.",
+          {"peer": PEER_URL, "peerResult": worker_result.get("result", worker_result)},
+        )
+        return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+      inventory = _inventory_summary()
+      result = _task_result(
+        "Inventory analyst completed the task and returned discovered AI resources.",
+        inventory,
+      )
+      return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+
+    if __name__ == "__main__":
+      uvicorn.run(app, host="0.0.0.0", port=8080)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lab4-inventory-analyst-a2a
+  namespace: kagent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lab4-inventory-analyst-a2a
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: lab4-inventory-analyst-a2a
+    spec:
+      serviceAccountName: lab4-a2a-agent
+      containers:
+        - name: app
+          image: ghcr.io/astral-sh/uv:debian
+          imagePullPolicy: IfNotPresent
+          command:
+            - uv
+            - run
+            - --with
+            - fastapi
+            - --with
+            - uvicorn
+            - --with
+            - httpx
+            - --with
+            - kubernetes
+            - python
+            - /app/server.py
+          env:
+            - name: AGENT_NAME
+              value: lab4-inventory-analyst-a2a
+            - name: AGENT_ROLE
+              value: analyst
+            - name: PUBLIC_URL
+              value: http://lab4-inventory-analyst-a2a.kagent:8080
+          ports:
+            - containerPort: 8080
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+          volumeMounts:
+            - name: code
+              mountPath: /app
+              readOnly: true
+      volumes:
+        - name: code
+          configMap:
+            name: lab4-a2a-agent-code
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lab4-inventory-analyst-a2a
+  namespace: kagent
+spec:
+  selector:
+    app.kubernetes.io/name: lab4-inventory-analyst-a2a
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lab4-orchestrator-a2a
+  namespace: kagent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lab4-orchestrator-a2a
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: lab4-orchestrator-a2a
+    spec:
+      serviceAccountName: lab4-a2a-agent
+      containers:
+        - name: app
+          image: ghcr.io/astral-sh/uv:debian
+          imagePullPolicy: IfNotPresent
+          command:
+            - uv
+            - run
+            - --with
+            - fastapi
+            - --with
+            - uvicorn
+            - --with
+            - httpx
+            - --with
+            - kubernetes
+            - python
+            - /app/server.py
+          env:
+            - name: AGENT_NAME
+              value: lab4-orchestrator-a2a
+            - name: AGENT_ROLE
+              value: orchestrator
+            - name: PUBLIC_URL
+              value: http://lab4-orchestrator-a2a.kagent:8080
+            - name: PEER_URL
+              value: http://lab4-inventory-analyst-a2a.kagent:8080
+          ports:
+            - containerPort: 8080
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+          volumeMounts:
+            - name: code
+              mountPath: /app
+              readOnly: true
+      volumes:
+        - name: code
+          configMap:
+            name: lab4-a2a-agent-code
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lab4-orchestrator-a2a
+  namespace: kagent
+spec:
+  selector:
+    app.kubernetes.io/name: lab4-orchestrator-a2a
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

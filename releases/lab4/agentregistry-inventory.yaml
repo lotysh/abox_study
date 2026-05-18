@@ -1,0 +1,55 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agentregistry
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: agentregistry-inventory
+  namespace: flux-system
+spec:
+  interval: 1h
+  url: https://github.com/den-vasyliev/agentregistry-inventory.git
+  ref:
+    branch: main
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: agentregistry-inventory-crds
+  namespace: flux-system
+spec:
+  interval: 1h
+  path: ./config/crd
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: agentregistry-inventory
+  wait: true
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: agentregistry-inventory
+  namespace: agentregistry
+spec:
+  interval: 1h
+  releaseName: agentregistry-inventory
+  chart:
+    spec:
+      chart: ./charts/agentregistry
+      sourceRef:
+        kind: GitRepository
+        name: agentregistry-inventory
+        namespace: flux-system
+  install:
+    createNamespace: true
+  values:
+    replicaCount: 1
+    controller:
+      leaderElection: false
+      logLevel: info
+    disableAuth: true
+    httpApi:
+      serviceType: ClusterIP

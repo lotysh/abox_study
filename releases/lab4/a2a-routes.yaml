@@ -1,0 +1,38 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: lab4-a2a
+  namespace: kagent
+spec:
+  parentRefs:
+    - name: agentgateway-external
+      namespace: agentgateway-system
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /lab4/a2a/orchestrator
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - name: lab4-orchestrator-a2a
+          namespace: kagent
+          port: 8080
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /lab4/a2a/analyst
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+      backendRefs:
+        - name: lab4-inventory-analyst-a2a
+          namespace: kagent
+          port: 8080
