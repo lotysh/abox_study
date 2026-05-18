@@ -164,16 +164,17 @@ The controller exposes:
 
 ## MCP Governance
 
-MCP Security Governance is deployed from:
+MCP Security Governance is deployed from the upstream Git repository Helm chart:
 
 ```text
-oci://ghcr.io/techwithhuz/charts/mcp-governance
+https://github.com/techwithhuz/mcp-security-governance
+chart: ./charts/mcp-governance
 ```
 
 Useful checks:
 
 ```bash
-kubectl get ocirepository mcp-governance -n flux-system
+kubectl get gitrepository mcp-governance -n flux-system
 kubectl get helmrelease mcp-governance -n mcp-governance
 kubectl get pods,svc -n mcp-governance
 ```

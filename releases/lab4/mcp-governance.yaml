@@ -4,15 +4,15 @@ metadata:
   name: mcp-governance
 ---
 apiVersion: source.toolkit.fluxcd.io/v1
-kind: OCIRepository
+kind: GitRepository
 metadata:
   name: mcp-governance
   namespace: flux-system
 spec:
   interval: 1h
-  url: oci://ghcr.io/techwithhuz/charts/mcp-governance
+  url: https://github.com/techwithhuz/mcp-security-governance.git
   ref:
-    tag: "1.0.0"
+    branch: main
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
@@ -22,10 +22,13 @@ metadata:
 spec:
   interval: 1h
   releaseName: mcp-governance
-  chartRef:
-    kind: OCIRepository
-    name: mcp-governance
-    namespace: flux-system
+  chart:
+    spec:
+      chart: ./charts/mcp-governance
+      sourceRef:
+        kind: GitRepository
+        name: mcp-governance
+        namespace: flux-system
   install:
     createNamespace: true
   values:
