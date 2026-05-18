@@ -179,6 +179,11 @@ kubectl get helmrelease mcp-governance -n mcp-governance
 kubectl get pods,svc -n mcp-governance
 ```
 
+The upstream chart defaults are intended for local image builds
+(`localhost/...` with `imagePullPolicy: Never`). The lab values override those
+defaults to use GHCR images and disable sample policy installation because the
+sample contains fields that are not accepted by the current CRD schema.
+
 ## Qdrant
 
 Qdrant is deployed from the official Helm repository:

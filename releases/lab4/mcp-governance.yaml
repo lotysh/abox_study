@@ -33,8 +33,17 @@ spec:
     createNamespace: true
   values:
     samples:
-      install: true
+      install: false
+    controller:
+      image:
+        repository: ghcr.io/techwithhuz/mcp-governance-controller
+        tag: latest
+        pullPolicy: IfNotPresent
     dashboard:
+      image:
+        repository: ghcr.io/techwithhuz/mcp-governance-dashboard
+        tag: latest
+        pullPolicy: IfNotPresent
       service:
         type: ClusterIP
     ai:
