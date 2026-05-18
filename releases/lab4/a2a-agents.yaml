@@ -94,6 +94,17 @@ data:
         return [{"error": f"{group}/{version}/{plural}: {exc.status} {exc.reason}"}]
 
 
+    def _items_any(group: str, versions: list[str], plural: str) -> list[dict[str, Any]]:
+      last_error = []
+      for version in versions:
+        items = _items(group, version, plural)
+        if items and isinstance(items[0], dict) and items[0].get("error"):
+          last_error = items
+          continue
+        return items
+      return last_error
+
+
     def _names(items: list[dict[str, Any]]) -> list[str]:
       names = []
       for item in items:
@@ -109,8 +120,8 @@ data:
 
     def _inventory_summary() -> dict[str, Any]:
       agents = _items("kagent.dev", "v1alpha2", "agents")
-      mcpservers = _items("kagent.dev", "v1alpha1", "mcpservers")
-      remote_mcpservers = _items("kagent.dev", "v1alpha1", "remotemcpservers")
+      mcpservers = _items_any("kagent.dev", ["v1alpha1", "v1alpha2"], "mcpservers")
+      remote_mcpservers = _items_any("kagent.dev", ["v1alpha2", "v1alpha1"], "remotemcpservers")
       modelconfigs = _items("kagent.dev", "v1alpha2", "modelconfigs")
       helmreleases = _items("helm.toolkit.fluxcd.io", "v2", "helmreleases")
       kustomizations = _items("kustomize.toolkit.fluxcd.io", "v1", "kustomizations")
